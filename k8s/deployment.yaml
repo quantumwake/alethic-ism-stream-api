@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alethic-ism-stream-api-deployment
+  namespace: alethic
+spec:
+  replicas: 1 
+  selector:
+    matchLabels:
+      app: alethic-ism-stream-api
+  template:
+    metadata:
+      labels:
+        app: alethic-ism-stream-api
+    spec:
+      volumes:
+        - name: alethic-ism-routes-secret-volume
+          secret:
+            secretName: alethic-ism-routes-secret
+            items:
+              - key: .routing.yaml
+                path: .routing.yaml
+        - name: alethic-ism-stream-api-secret-config-volume
+          secret:
+            secretName: alethic-ism-stream-api-secret
+            items:
+              - key: .firebase-credentials.json
+                path: .firebase-credentials.json
+      containers:
+      - name: alethic-ism-stream-api
+        image: <IMAGE>
+        imagePullPolicy: Always
+        volumeMounts:
+          - name: alethic-ism-routes-secret-volume
+            mountPath: /app/repo/.routing.yaml
+            subPath: .routing.yaml
+            readOnly: true
+          - name: alethic-ism-stream-api-secret-config-volume
+            mountPath: /app/repo/.firebase-credentials.json
+            subPath: .firebase-credentials.json
+            readOnly: true
+        env:
+          - name: NATS_URL
+            valueFrom:
+              secretKeyRef:
+                name: alethic-ism-stream-api-secret
+                key: NATS_URL
+          - name: ROUTING_FILE
+            valueFrom:
+              secretKeyRef:
+                name: alethic-ism-stream-api-secret
+                key: ROUTING_FILE
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: alethic-ism-stream-api-secret
+                key: DATABASE_URL
+        ports:
+        - containerPort: 80
+      imagePullSecrets:
+      - name: regcred

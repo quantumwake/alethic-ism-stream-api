@@ -1,0 +1,8 @@
+# Ignore git directory
+.git
+
+# Ignore any .log files
+*.log
+
+# Ignore build cache
+.cache
