@@ -1,0 +1,285 @@
+type BaseProxy struct {
+	// The connection handling the requests going to NATS
+	EgressConnection *nats.Conn
+
+	// The connection handling the responses coming from NATS
+	//IngressConnection *nats.Conn
+
+	// Map to store multiple subscriptions
+	//EgressSubscriptions sync.Map
+
+	// The set of subscribers/users that wish to communicate with the same egress route
+	// Outer map: session ID to inner map
+	// Inner map: WebSocket connection pointer to empty struct (used as a set)
+	//IngressConnections sync.Map
+
+	SessionPool *session.SessionPool
+
+}
+
+func (s *session.SessionPool) Connect() error {
+	// TODO for now this is the easiest approach, not great but easiest, but it will work.
+	// synchronous access to any part of this session
+	s.synchronous.Lock()
+	defer s.synchronous.Unlock()
+
+	// Get NATS URL from environment variable
+	url, ok := os.LookupEnv("NATS_INGRESS_URL")
+	if !ok {
+		url = nats.DefaultURL
+	}
+
+	// Connect to NATS
+	nc, err := nats.Connect(url, nats.Timeout(20*time.Second), nats.MaxPingsOutstanding(10))
+	if err != nil {
+		log.Printf("unable to establish connection %v to nats url %v\n", err, url)
+		return err
+	}
+	s.NATSConn = nc
+
+	return nil
+}
+
+// Subscribe using a unique session allows for multiple clients (users, systems - via websockets)
+// to send and receive data on the same subject
+func (s *session.SessionPool) Subscribe() (*nats.Subscription, error) {
+	// TODO for now this is the easiest approach, not great but easiest, but it will work.
+	// synchronous access to any part of this session
+	s.synchronous.Lock()
+	defer s.synchronous.Unlock()
+
+	if len(s.Connections) == 0 {
+		return nil, fmt.Errorf("no inbound connections, close nats connection, "+
+			"inbound websocket is required to establish a nats outbound connection %v\n", s.NATSConn)
+	}
+
+	callback := func(m *nats.Msg) {
+		//value, loaded := s.Connections.
+		//if !loaded {
+		//	log.Printf("no connections are available for requested websocket session: %v\n", session)
+		//	return
+		//}
+
+		var toClose []interface{}
+		sessions := value.(*sync.Map)
+
+		sessions.Range(func(wsKey, _ interface{}) bool { // we use .range to prevent concurrent write and iterate access to sessions
+			ws := wsKey.(*websocket.Conn)
+			if err := ws.WriteMessage(websocket.TextMessage, m.Data); err != nil {
+				log.Printf("failed to write WebSocket message for session %s: %v", session, err)
+				toClose = append(toClose, ws)
+			}
+			return true
+		})
+
+		// delete the connections that failed from the session
+		for _, wsKey := range toClose {
+			ws := wsKey.(*websocket.Conn)
+			err := ws.Close()
+			if err != nil {
+				log.Printf("failed to close websocket connection for session %s: %v", session, err)
+			}
+
+			// delete the websocket from the list of connections within the session
+			sessions.Delete(session)
+		}
+	}
+
+	// Use LoadOrStore to ensure atomic check-and-set operation
+	sub, loaded := nr.EgressSubscriptions.LoadOrStore(subject, &sync.Once{})
+	if loaded {
+		// If it's already a *nats.Subscription, return it
+		if natsSubscription, ok := sub.(*nats.Subscription); ok {
+			return natsSubscription, nil
+		}
+	}
+
+	// If it's a *sync.Once, use it to ensure the subscription is created only once
+	once, ok := sub.(*sync.Once)
+	if !ok {
+		return nil, fmt.Errorf("unexpected value type in EgressSubscriptions for subject: %s", subject)
+	}
+
+	var natsSubscription *nats.Subscription
+	var subscribeErr error
+
+	once.Do(func() {
+		natsSubscription, subscribeErr = nr.EgressConnection.Subscribe(subject, callback)
+		if subscribeErr == nil {
+			// If subscription was successful, store the actual *nats.Subscription
+			log.Printf("successfully subscribed to NATS subject: %v, session: %v\n", subject, session)
+			nr.EgressSubscriptions.Store(subject, natsSubscription)
+		} else {
+			// If subscription failed, remove the sync.Once
+			log.Printf("failed to subscribe to NATS subject %v, session: %v, error: %v\n", subject, session, subscribeErr)
+			nr.EgressSubscriptions.Delete(subject)
+		}
+	})
+
+	if subscribeErr != nil {
+		return nil, subscribeErr
+	}
+
+	return natsSubscription, nil
+}
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Adjust this for production!
+	},
+}
+
+type Message struct {
+	Type      string      `json:"type"`
+	Payload   interface{} `json:"payload"`
+	RequestID string      `json:"request_id,omitempty"`
+}
+
+////
+////func (s *session.SessionPool) Request(msg string) {
+////	s.NATSConn.Request(msg)
+////}
+////
+////func (s *session.SessionPool) RegisterIngress(conn *websocket.Conn) {
+////	s.Connections.Store(conn, struct{}{})
+////}
+//
+//func (s *session.SessionPool) CloseConnection(conn *websocket.Conn) {
+//	value, _ := s.Connections.LoadAndDelete(conn)
+//	conn = value.(*websocket.Conn)
+//	err := conn.Close()
+//	if err != nil {
+//		log.Printf("warning, error closing connection gracefully: %v", err)
+//		return
+//	}
+//}
+
+type NATSProxyRequestReply struct {
+	BaseProxy
+}
+
+type NATSProxyStateSessionStream struct {
+	BaseProxy
+}
+
+//
+//func (nr *BaseProxy) ConnectIngress(url string) (*nats.Conn, error) {
+//	// Get NATS URL from environment variable
+//	natsURL, ok := os.LookupEnv("NATS_INGRESS_URL")
+//	if !ok {
+//		natsURL = nats.DefaultURL
+//	}
+//
+//	connection, err := nr.Connect(natsURL)
+//	if err != nil {
+//		return nil, err
+//	}
+//	nr.EgressConnection = connection
+//	return connection, nil
+//}
+//
+//// Subscribe using a unique session allows for multiple clients (users, systems - via websockets)
+//// to send and receive data on the same subject
+//func (nr *NATSProxyStateSessionStream) Subscribe(session string, subject string) (*nats.Subscription, error) {
+//	callback := func(m *nats.Msg) {
+//		value, loaded := nr.IngressConnections.Load(session)
+//		if !loaded {
+//			log.Printf("no connections are available for requested websocket session: %v\n", session)
+//			return
+//		}
+//
+//		var toClose []interface{}
+//		sessions := value.(*sync.Map)
+//		sessions.Range(func(wsKey, _ interface{}) bool { // we use .range to prevent concurrent write and iterate access to sessions
+//			ws := wsKey.(*websocket.Conn)
+//			if err := ws.WriteMessage(websocket.TextMessage, m.Data); err != nil {
+//				log.Printf("failed to write WebSocket message for session %s: %v", session, err)
+//				toClose = append(toClose, ws)
+//			}
+//			return true
+//		})
+//
+//		// delete the connections that failed from the session
+//		for _, wsKey := range toClose {
+//			ws := wsKey.(*websocket.Conn)
+//			err := ws.Close()
+//			if err != nil {
+//				log.Printf("failed to close websocket connection for session %s: %v", session, err)
+//			}
+//
+//			// delete the websocket from the list of connections within the session
+//			sessions.Delete(session)
+//		}
+//	}
+//
+//	// Use LoadOrStore to ensure atomic check-and-set operation
+//	sub, loaded := nr.EgressSubscriptions.LoadOrStore(subject, &sync.Once{})
+//	if loaded {
+//		// If it's already a *nats.Subscription, return it
+//		if natsSubscription, ok := sub.(*nats.Subscription); ok {
+//			return natsSubscription, nil
+//		}
+//	}
+//
+//	// If it's a *sync.Once, use it to ensure the subscription is created only once
+//	once, ok := sub.(*sync.Once)
+//	if !ok {
+//		return nil, fmt.Errorf("unexpected value type in EgressSubscriptions for subject: %s", subject)
+//	}
+//
+//	var natsSubscription *nats.Subscription
+//	var subscribeErr error
+//
+//	once.Do(func() {
+//		natsSubscription, subscribeErr = nr.EgressConnection.Subscribe(subject, callback)
+//		if subscribeErr == nil {
+//			// If subscription was successful, store the actual *nats.Subscription
+//			log.Printf("successfully subscribed to NATS subject: %v, session: %v\n", subject, session)
+//			nr.EgressSubscriptions.Store(subject, natsSubscription)
+//		} else {
+//			// If subscription failed, remove the sync.Once
+//			log.Printf("failed to subscribe to NATS subject %v, session: %v, error: %v\n", subject, session, subscribeErr)
+//			nr.EgressSubscriptions.Delete(subject)
+//		}
+//	})
+//
+//	if subscribeErr != nil {
+//		return nil, subscribeErr
+//	}
+//
+//	return natsSubscription, nil
+//}
+//
+//func (nr *NATSProxyStateSessionStream) JoinSession(session string, conn *websocket.Conn) bool {
+//	// check the ingress connections for a session store (which holds all the inbound websocket connections)
+//	sessionStore, _ := nr.IngressConnections.LoadOrStore(session, &sync.Map{})
+//
+//	// subscribe the new inbound websocket to a session store (e.g. {websockets} => processor.state.{session}
+//	sessionIngressConnections := sessionStore.(*sync.Map)
+//	sessionIngressConnections.Store(conn, struct{}{})
+//	return true
+//}
+//
+//func (nr *NATSProxyStateSessionStream) Unsubscribe(subject string) error {
+//	// fetch the subscription and delete it from the list of egress connections
+//	log.Printf("Unsubscribing from NATS subject: %v\n", subject)
+//	value, loaded := nr.EgressSubscriptions.LoadAndDelete(subject)
+//	if !loaded {
+//		log.Printf("error unsubscribing from NATS, possible race condition - should not happen %v\n", subject)
+//		return nil
+//	}
+//
+//	// get the subscription and unsubscribe from the nats subject
+//	subscription := value.(*nats.Subscription)
+//
+//	// unsubscribe from the nats route
+//	err := subscription.Unsubscribe()
+//
+//	if err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
