@@ -30,7 +30,7 @@ func NewNATSProxy(natsUrl string, handler func(*NATSProxy, *pool.Pool, *nats.Msg
 	}
 }
 
-// JoinPool a websocket.go connection joins the subject pool
+// JoinPool a entity.go connection joins the subject pool
 func (p *NATSProxy) JoinPool(subject string, websocket *websocket.Conn) (*pool.Pool, *pool.PoolConnection, error) {
 	dsPool, err := p.CreateOrLoadSessionPool(subject)
 	if err != nil {
@@ -53,7 +53,7 @@ func (p *NATSProxy) NewPool(subject string) (*pool.Pool, error) {
 	return dsPool, nil
 }
 
-// CreateOrLoadSessionPool loads an existing pool if it exists, otherwise it creates a new one such that we can add new websocket.go connections and establish downstream NATS subscription
+// CreateOrLoadSessionPool loads an existing pool if it exists, otherwise it creates a new one such that we can add new entity.go connections and establish downstream NATS subscription
 func (p *NATSProxy) CreateOrLoadSessionPool(subject string) (*pool.Pool, error) {
 	var dsPool *pool.Pool
 	var err error
@@ -110,16 +110,16 @@ func (p *NATSProxy) UpgradeWebsocketAndJoinPool(subject string, c *gin.Context) 
 	// Upgrade initial GET request to a WebSocket
 	wsConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to upgrade to websocket.go: %v, error: %v:\n", wsConn.RemoteAddr(), err)
+		return nil, nil, fmt.Errorf("failed to upgrade to entity.go: %v, error: %v:\n", wsConn.RemoteAddr(), err)
 	}
 
 	// use the id in your WebSocket logic
-	log.Printf("websocket.go connection established for subject: %v, address: %v", subject, wsConn.RemoteAddr())
+	log.Printf("entity.go connection established for subject: %v, address: %v", subject, wsConn.RemoteAddr())
 
-	// join the inbound websocket.go connection to the pool, which has inbound/output functionality to the ISM system via NATS
+	// join the inbound entity.go connection to the pool, which has inbound/output functionality to the ISM system via NATS
 	dsPool, wsPoolConn, err := p.JoinPool(subject, wsConn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to add websocket.go connection for subject: %v, conn: %v, error: %v\n", subject, wsConn.RemoteAddr(), err)
+		return nil, nil, fmt.Errorf("failed to add entity.go connection for subject: %v, conn: %v, error: %v\n", subject, wsConn.RemoteAddr(), err)
 	}
 
 	return dsPool, wsPoolConn, err
@@ -129,10 +129,7 @@ func (p *NATSProxy) UpgradeWebsocketAndJoinPool(subject string, c *gin.Context) 
 // TODO ensure proper closing of sockets and NATS routes
 // TODO ensure to verify that the user, project and datsource exist
 func (p *NATSProxy) HandleStreamWebsocket(c *gin.Context) {
-	// TODO verify datasource identity
-	// there is a single pool for this datasource connection, multiple
-	//subject, err := p.GetSubjectPath(c)
-
+	// TODO verify client identity
 	// Get the path variable
 	state := c.Param("state")
 	if state == "" {
@@ -154,7 +151,7 @@ func (p *NATSProxy) HandleStreamWebsocket(c *gin.Context) {
 	_, _, err := p.UpgradeWebsocketAndJoinPool(subject, c)
 	if err != nil {
 		// TODO response 500?
-		log.Printf("failed to upgrade to websocket.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
+		log.Printf("failed to upgrade to entity.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
 	}
 
 }
@@ -171,7 +168,7 @@ func (p *NATSProxy) HandleDataSourceWebsocket(c *gin.Context) {
 
 	dsPool, wsPoolConn, err := p.UpgradeWebsocketAndJoinPool(ds, c)
 	if err != nil {
-		log.Printf("failed to upgrade to websocket.go: %v, ds subject: %v, error: %v\n\n", c.RemoteIP(), ds, err)
+		log.Printf("failed to upgrade to entity.go: %v, ds subject: %v, error: %v\n\n", c.RemoteIP(), ds, err)
 	}
 
 	// spawn a go routine that waits for replies on the websocket and responds to the originating nats request

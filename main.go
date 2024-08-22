@@ -69,7 +69,7 @@ func main() {
 	proxyStreamProxy := proxy.NewNATSProxy(natsURL, streamHandler)
 	dataSourceProxy := proxy.NewNATSProxy(natsURL, requestReplyHandler)
 
-	// setup gin endpoints (inbound websocket.go connection handlers on /ws/? path)
+	// setup gin endpoints (inbound entity.go connection handlers on /ws/? path)
 	router := gin.Default()
 	//router.GET("/ws/:state", proxy.HandleStateSessionWebsocket)
 	router.GET("/ws/stream/:state/:session", proxyStreamProxy.HandleStreamWebsocket)

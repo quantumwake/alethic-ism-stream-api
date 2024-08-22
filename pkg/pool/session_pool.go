@@ -45,13 +45,13 @@ func (p *Pool) GetRandomConnection() (*PoolConnection, error) {
 }
 
 //// DataReceivedHandler data inbound on NATS subject handled by the implementation of this method.
-//// Example: a processor sends streaming data to a NATS subject, data is received on this method and fans out to all websocket.go connections
-//// Example: a processor sends query request to search a connected datasource, data is received on this method and a datasource connection is selected from the list of websocket.go connections
+//// Example: a processor sends streaming data to a NATS subject, data is received on this method and fans out to all entity.go connections
+//// Example: a processor sends query request to search a connected datasource, data is received on this method and a datasource connection is selected from the list of entity.go connections
 //func (s *Pool) DataReceivedHandler(msg *nats.Msg) {
 //	fmt.Println("handling NATS response in base NATSProxy")
 //}
 
-func (p *StreamPool) StreamDataReceivedHandler(m *nats.Msg) {
+func (p *Pool) StreamDataReceivedHandler(m *nats.Msg) {
 	// write data to all sockets
 	p.Synchronous.RLock()
 	var toClose []*PoolConnection
