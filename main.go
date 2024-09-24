@@ -8,9 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nats-io/nats.go"
 	"log"
+	"os"
 )
-
-const natsURL = "nats://localhost:4222"
 
 func requestReplyHandler(p *proxy.NATSProxy, dsPool *pool.Pool, msg *nats.Msg) {
 	wsConn, err := dsPool.GetRandomConnection()
@@ -66,13 +65,20 @@ func streamHandler(p *proxy.NATSProxy, dsPool *pool.Pool, msg *nats.Msg) {
 }
 
 func main() {
+
+	var natsURL, ok = os.LookupEnv("NATS_URL")
+	if !ok {
+		natsURL = "nats://localhost:4222"
+	}
+
 	proxyStreamProxy := proxy.NewNATSProxy(natsURL, streamHandler)
 	dataSourceProxy := proxy.NewNATSProxy(natsURL, requestReplyHandler)
 
 	// setup gin endpoints (inbound entity.go connection handlers on /ws/? path)
 	router := gin.Default()
 	//router.GET("/ws/:state", proxy.HandleStateSessionWebsocket)
-	router.GET("/ws/stream/:state/:session", proxyStreamProxy.HandleStreamWebsocket)
+	router.GET("/ws/stream/:state/:session", proxyStreamProxy.HandleStateSessionWebsocket)
+	router.GET("/ws/stream/:state", proxyStreamProxy.HandleStateWebsocket)
 	router.GET("/ws/ds/:ds", dataSourceProxy.HandleDataSourceWebsocket)
 
 	log.Println("Starting server on :8080")

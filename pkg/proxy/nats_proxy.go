@@ -128,7 +128,29 @@ func (p *NATSProxy) UpgradeWebsocketAndJoinPool(subject string, c *gin.Context) 
 // HandleStateSessionWebsocket
 // TODO ensure proper closing of sockets and NATS routes
 // TODO ensure to verify that the user, project and datsource exist
-func (p *NATSProxy) HandleStreamWebsocket(c *gin.Context) {
+func (p *NATSProxy) HandleStateWebsocket(c *gin.Context) {
+	// TODO verify client identity
+	// Get the path variable
+	state := c.Param("state")
+	if state == "" {
+		// TODO response 404?
+		log.Println("state id needs to be part of the path, id in /ws/:state/:session is missing")
+		return
+	}
+
+	subject := fmt.Sprintf("processor.state.%s", state)
+
+	_, _, err := p.UpgradeWebsocketAndJoinPool(subject, c)
+	if err != nil {
+		// TODO response 500?
+		log.Printf("failed to upgrade to entity.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
+	}
+}
+
+// HandleStateSessionWebsocket
+// TODO ensure proper closing of sockets and NATS routes
+// TODO ensure to verify that the user, project and datsource exist
+func (p *NATSProxy) HandleStateSessionWebsocket(c *gin.Context) {
 	// TODO verify client identity
 	// Get the path variable
 	state := c.Param("state")
@@ -142,7 +164,7 @@ func (p *NATSProxy) HandleStreamWebsocket(c *gin.Context) {
 	session := c.Param("session")
 	if session == "" {
 		// TODO response 500?
-		log.Println("session needs to be part of the path, id in /ws/:id is missing")
+		log.Println("no session id session needs to be part of the path, id in /ws/:id is missing")
 		return
 	}
 
@@ -153,7 +175,6 @@ func (p *NATSProxy) HandleStreamWebsocket(c *gin.Context) {
 		// TODO response 500?
 		log.Printf("failed to upgrade to entity.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
 	}
-
 }
 
 func (p *NATSProxy) HandleDataSourceWebsocket(c *gin.Context) {

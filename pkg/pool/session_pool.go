@@ -124,7 +124,9 @@ type PoolConnection struct {
 	Response chan []byte
 	mu       sync.RWMutex
 
-	// track the request id with the sent resource operation, this is later used to reply back to the original request forwarded from NATS
+	// TODO need to ensure we clean up dead requests
+
+	// track the request for reply , this is later used to reply back to the original request forwarded from NATS
 	requests map[string]*model.ResourceRequest
 }
 
@@ -228,10 +230,6 @@ func (pc *PoolConnection) ResourceRequest(processRequest model.ProcessRequest) e
 		return fmt.Errorf("failed to write request: %v, error: %v", request.ID, request)
 	}
 
-	return nil
-}
-
-func (pc *PoolConnection) ResourceReply(operation model.ResourceReply) error {
 	return nil
 }
 
