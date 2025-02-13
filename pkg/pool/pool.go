@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+// Pool captures a map of websocket connections, as related to the NATS subject. This allows client connections to
+// receive a stream of events, as events are processed off the nats subject queue. A pool also ensures connectivity
+// is maintained with the respective NATS subject channel, and manages the reconciliation of dead websockets.
 type Pool struct {
 	Connections map[*PoolConnection]struct{}
 
@@ -25,49 +28,43 @@ type Pool struct {
 	Synchronous sync.RWMutex
 }
 
-// TODO not a very efficient method, O(N)
-func (p *Pool) GetRandomConnection() (*PoolConnection, error) {
-	p.Synchronous.RLock()
-	defer p.Synchronous.RUnlock()
+// GetRandomConnection fetches a random websocket connection from the set of active connections.
+// TODO not a very efficient method, O(N), least-accessed might be more effective.
+func (s *Pool) GetRandomConnection() (*PoolConnection, error) {
+	s.Synchronous.RLock()
+	defer s.Synchronous.RUnlock()
 
-	if len(p.Connections) == 0 {
+	if len(s.Connections) == 0 {
 		return nil, fmt.Errorf("no connections available in the pool")
 	}
 
 	// Convert the map to a slice of its keys
-	conns := make([]*PoolConnection, 0, len(p.Connections))
-	for conn := range p.Connections {
-		conns = append(conns, conn)
+	connections := make([]*PoolConnection, 0, len(s.Connections))
+	for conn := range s.Connections {
+		connections = append(connections, conn)
 	}
 
 	// Select a random connection
-	return conns[rand.Intn(len(conns))], nil
+	return connections[rand.Intn(len(connections))], nil
 }
 
-//// DataReceivedHandler data inbound on NATS subject handled by the implementation of this method.
-//// Example: a processor sends streaming data to a NATS subject, data is received on this method and fans out to all entity.go connections
-//// Example: a processor sends query request to search a connected datasource, data is received on this method and a datasource connection is selected from the list of entity.go connections
-//func (s *Pool) DataReceivedHandler(msg *nats.Msg) {
-//	fmt.Println("handling NATS response in base NATSProxy")
-//}
-
-func (p *Pool) StreamDataReceivedHandler(m *nats.Msg) {
+func (s *Pool) StreamDataReceivedHandler(m *nats.Msg) {
 	// write data to all sockets
-	p.Synchronous.RLock()
+	s.Synchronous.RLock()
 	var toClose []*PoolConnection
-	for wsConn, _ := range p.Connections {
+	for wsConn, _ := range s.Connections {
 		if err := wsConn.ws.WriteMessage(websocket.TextMessage, m.Data); err != nil {
-			log.Printf("failed to write message to remote address: %v, pool: %v, error: %v", wsConn.ws.RemoteAddr(), p.Subject, err)
+			log.Printf("failed to write message to remote address: %v, pool: %v, error: %v", wsConn.ws.RemoteAddr(), s.Subject, err)
 			toClose = append(toClose, wsConn)
 		}
 	}
-	p.Synchronous.RUnlock()
+	s.Synchronous.RUnlock()
 
 	// delete connections that failed write
-	p.RemoveConnections(toClose)
+	s.RemoveConnections(toClose)
 }
 
-func NewSessionPool(natsURL string, subject string) (*Pool, error) {
+func NewPool(natsURL string, subject string) (*Pool, error) {
 	sp := &Pool{
 		Connections: make(map[*PoolConnection]struct{}),
 		Subject:     subject,
@@ -117,17 +114,6 @@ func (s *Pool) Subscribe(subject string, callback nats.MsgHandler) (*nats.Subscr
 	log.Printf("Successfully created SessionPool for subject: %s", subject)
 
 	return sub, nil
-}
-
-type PoolConnection struct {
-	ws       *websocket.Conn
-	Response chan []byte
-	mu       sync.RWMutex
-
-	// TODO need to ensure we clean up dead requests
-
-	// track the request for reply , this is later used to reply back to the original request forwarded from NATS
-	requests map[string]*model.ResourceRequest
 }
 
 func (pc *PoolConnection) String() string {

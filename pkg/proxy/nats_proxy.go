@@ -11,32 +11,50 @@ import (
 	"sync"
 )
 
-var upgrader = websocket.Upgrader{
+// WebsocketUpgrade upgrader for inbound gin http requests.
+var WebsocketUpgrade = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
 }
 
-type NATSProxy struct {
-	NATSUrl            string
-	NATSMessageHandler func(*NATSProxy, *pool.Pool, *nats.Msg)
-	DataSources        sync.Map
+// NATSProxyAdapter defines the function signature for when a new websocket is established.
+type NATSProxyAdapter interface {
+	OnMessage(proxy *NATSProxy, dsPool *pool.Pool, msg *nats.Msg)
+	OnConnect(proxy *NATSProxy, ctx *gin.Context)
 }
 
-func NewNATSProxy(natsUrl string, handler func(*NATSProxy, *pool.Pool, *nats.Msg)) *NATSProxy {
+// NATSProxy encapsulates the general management of web connections and NATS subjects, as defined by pool.Pool.
+type NATSProxy struct {
+	// NATSUrl defines the primary nats connection url
+	NATSUrl string
+
+	Handler NATSProxyAdapter
+	// NATSMessageHandler defines the handling function when messages are consumed on the NATS subject.
+	//NATSMessageHandler func(*NATSProxy, *pool.Pool, *nats.Msg)
+
+	// Pools defines a list of subject to pool associations, where each pool maintains a list of websocket connections associated to a NATS subject.
+	Pools sync.Map
+}
+
+// NewNATSProxy creates a new NATSProxy using a pool creation handling method.
+func NewNATSProxy(natsUrl string, handler NATSProxyAdapter) *NATSProxy {
 	return &NATSProxy{
-		NATSUrl:            natsUrl,
-		NATSMessageHandler: handler,
+		NATSUrl: natsUrl,
+		Handler: handler,
 	}
 }
 
-// JoinPool a entity.go connection joins the subject pool
+// JoinPool establishes a relation between the http upgraded websocket with a NATS subject.
+// this ensures that any data consumed on the NATS subject is propagated to the related set of active websocket connections.
 func (p *NATSProxy) JoinPool(subject string, websocket *websocket.Conn) (*pool.Pool, *pool.PoolConnection, error) {
-	dsPool, err := p.CreateOrLoadSessionPool(subject)
+
+	// create a new pool for given subject, if pool does not exist, otherwise return existing pool.
+	dsPool, err := p.LoadOrCreatePool(subject)
 	if err != nil {
 		return nil, nil, fmt.Errorf("register or load pool pool failed: %v", err)
 	}
-
+	// add the websocket connection to the set of active connections for this particular nats subject.
 	poolConnection := pool.NewPoolConnection(websocket)
 	if err = dsPool.AddConnection(poolConnection); err != nil {
 		return nil, nil, fmt.Errorf("register or load pool connection failed: %v", err)
@@ -45,20 +63,13 @@ func (p *NATSProxy) JoinPool(subject string, websocket *websocket.Conn) (*pool.P
 	return dsPool, poolConnection, err
 }
 
-func (p *NATSProxy) NewPool(subject string) (*pool.Pool, error) {
-	dsPool, err := pool.NewSessionPool(p.NATSUrl, subject)
-	if err != nil {
-		return nil, fmt.Errorf("create new pool pool failed: %v", err)
-	}
-	return dsPool, nil
-}
-
-// CreateOrLoadSessionPool loads an existing pool if it exists, otherwise it creates a new one such that we can add new entity.go connections and establish downstream NATS subscription
-func (p *NATSProxy) CreateOrLoadSessionPool(subject string) (*pool.Pool, error) {
+// LoadOrCreatePool return existing pool if exists, otherwise creates a new websocket connection pool.
+func (p *NATSProxy) LoadOrCreatePool(subject string) (*pool.Pool, error) {
 	var dsPool *pool.Pool
 	var err error
 
-	value, loaded := p.DataSources.LoadOrStore(subject, &sync.Once{})
+	//  load or create a new pool, atomically.
+	value, loaded := p.Pools.LoadOrStore(subject, &sync.Once{})
 	if loaded {
 		dsPool, ok := value.(*pool.Pool)
 		if !ok {
@@ -69,13 +80,13 @@ func (p *NATSProxy) CreateOrLoadSessionPool(subject string) (*pool.Pool, error) 
 
 	once := value.(*sync.Once)
 	once.Do(func() {
-		dsPool, err = p.NewPool(subject)
+		dsPool, err = pool.NewPool(p.NATSUrl, subject)
 		if err != nil {
 			return
 		}
 
 		handler := func(msg *nats.Msg) {
-			p.NATSMessageHandler(p, dsPool, msg)
+			p.Handler.OnMessage(p, dsPool, msg)
 		}
 
 		sub, subErr := dsPool.Subscribe(subject, handler)
@@ -84,16 +95,16 @@ func (p *NATSProxy) CreateOrLoadSessionPool(subject string) (*pool.Pool, error) 
 			return
 		}
 		dsPool.Subscription = sub
-		p.DataSources.Store(subject, dsPool)
+		p.Pools.Store(subject, dsPool)
 	})
 
 	if err != nil {
-		p.DataSources.Delete(subject) // Clean up on failure
+		p.Pools.Delete(subject) // Clean up on failure
 		return nil, fmt.Errorf("failed to create session pool for subject %s: %v", subject, err)
 	}
 
 	// Re-load the pool to ensure we're returning the correct instance
-	value, _ = p.DataSources.Load(subject)
+	value, _ = p.Pools.Load(subject)
 	dsPool, ok := value.(*pool.Pool)
 	if !ok {
 		return nil, fmt.Errorf("failed to load created pool for subject: %s", subject)
@@ -102,13 +113,10 @@ func (p *NATSProxy) CreateOrLoadSessionPool(subject string) (*pool.Pool, error) 
 	return dsPool, nil
 }
 
-func (p *NATSProxy) GetSubjectPath(*gin.Context) (string, error) {
-	return "", nil
-}
-
+// UpgradeWebsocketAndJoinPool upgrades the current gin http request to a websocket, and joins the subject pool.
 func (p *NATSProxy) UpgradeWebsocketAndJoinPool(subject string, c *gin.Context) (*pool.Pool, *pool.PoolConnection, error) {
 	// Upgrade initial GET request to a WebSocket
-	wsConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	wsConn, err := WebsocketUpgrade.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to upgrade to entity.go: %v, error: %v:\n", wsConn.RemoteAddr(), err)
 	}
@@ -123,75 +131,4 @@ func (p *NATSProxy) UpgradeWebsocketAndJoinPool(subject string, c *gin.Context) 
 	}
 
 	return dsPool, wsPoolConn, err
-}
-
-// HandleStateSessionWebsocket
-// TODO ensure proper closing of sockets and NATS routes
-// TODO ensure to verify that the user, project and datsource exist
-func (p *NATSProxy) HandleStateWebsocket(c *gin.Context) {
-	// TODO verify client identity
-	// Get the path variable
-	state := c.Param("state")
-	if state == "" {
-		// TODO response 404?
-		log.Println("state id needs to be part of the path, id in /ws/:state/:session is missing")
-		return
-	}
-
-	subject := fmt.Sprintf("processor.state.%s", state)
-
-	_, _, err := p.UpgradeWebsocketAndJoinPool(subject, c)
-	if err != nil {
-		// TODO response 500?
-		log.Printf("failed to upgrade to entity.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
-	}
-}
-
-// HandleStateSessionWebsocket
-// TODO ensure proper closing of sockets and NATS routes
-// TODO ensure to verify that the user, project and datsource exist
-func (p *NATSProxy) HandleStateSessionWebsocket(c *gin.Context) {
-	// TODO verify client identity
-	// Get the path variable
-	state := c.Param("state")
-	if state == "" {
-		// TODO response 404?
-		log.Println("state id needs to be part of the path, id in /ws/:state/:session is missing")
-		return
-	}
-
-	// optional
-	session := c.Param("session")
-	if session == "" {
-		// TODO response 500?
-		log.Println("no session id session needs to be part of the path, id in /ws/:id is missing")
-		return
-	}
-
-	subject := fmt.Sprintf("processor.state.%s.%s", state, session)
-
-	_, _, err := p.UpgradeWebsocketAndJoinPool(subject, c)
-	if err != nil {
-		// TODO response 500?
-		log.Printf("failed to upgrade to entity.go: %v, subject: %v, error: %v\n\n", c.RemoteIP(), subject, err)
-	}
-}
-
-func (p *NATSProxy) HandleDataSourceWebsocket(c *gin.Context) {
-	ds := c.Param("ds")
-	if ds == "" {
-		log.Println("datasource (ds) is required. /ws/:ds is missing or invalid")
-		// TODO response 404?
-		return
-	}
-
-	ds = fmt.Sprintf("datasource.%s", ds)
-
-	dsPool, wsPoolConn, err := p.UpgradeWebsocketAndJoinPool(ds, c)
-	if err != nil {
-		log.Printf("failed to upgrade to entity.go: %v, ds subject: %v, error: %v\n\n", c.RemoteIP(), ds, err)
-	}
-
-	// spawn a go routine that waits for replies on the websocket and responds to the originating nats request
-	go wsPoolConn.WaitResourceReply(dsPool, wsPoolConn)
 }
