@@ -15,6 +15,8 @@ while getopts 'i:' flag; do
   esac
 done
 
-echo "deploying image $IMAGE to k8s"
-cat k8s/deployment.yaml | sed "s|<IMAGE>|$IMAGE|g" > k8s/deployment-output.yaml
-kubectl apply -f k8s/deployment-output.yaml
+LATEST=$(echo "$IMAGE" | sed -e 's/\:.*$/:latest/g')
+
+echo "pushing docker image"
+docker push "$IMAGE"
+docker push "$LATEST"
