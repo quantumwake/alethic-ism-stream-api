@@ -62,6 +62,6 @@ pack build "$IMAGE" \
 else
   echo "Building with Docker..."
   docker build --progress=plain \
-    --platform "$ARCH" -t "$IMAGE" -t $LATEST \
+    --platform "$ARCH" -t "$IMAGE" -t "$LATEST" \
     --no-cache .
 fi

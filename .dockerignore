@@ -6,3 +6,6 @@
 
 # Ignore build cache
 .cache
+
+# Ignore build artifacts
+alethic-ism-stream-api
