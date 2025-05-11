@@ -15,8 +15,5 @@ while getopts 'i:' flag; do
   esac
 done
 
-LATEST=$(echo "$IMAGE" | sed -e 's/\:.*$/:latest/g')
-
 echo "pushing docker image"
-docker push "$IMAGE"
-docker push "$LATEST"
+docker push $IMAGE

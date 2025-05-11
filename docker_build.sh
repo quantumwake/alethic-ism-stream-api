@@ -40,14 +40,28 @@ echo "Using Buildpack: $USE_BUILDPACK"
 
 if [ "$USE_BUILDPACK" = true ]; then
   echo "Building with buildpack..."
-  pack build "$IMAGE" \
-    --builder paketobuildpacks/builder:base \
-    --path . \
-    --env BP_DOCKERFILE=Dockerfile \
-    --env BP_PLATFORM_API="$ARCH"
+#  pack build "$IMAGE" \
+#    --builder paketobuildpacks/builder-jammy-buildpackless-static \
+#    --buildpack paketo-buildpacks/go \
+#    --env "CGO_ENABLED=0" \
+#    --env "BP_GO_BUILD_FLAGS=-buildmode=default" \
+#    --env BP_PLATFORM_API="$ARCH"
+
+pack build "$IMAGE" \
+  --builder paketobuildpacks/builder-jammy-buildpackless-static \
+  --buildpack paketo-buildpacks/go \
+  --env "CGO_ENABLED=0" \
+  --env "BP_GO_BUILD_FLAGS=-buildmode=default" \
+  --env "GOPRIVATE=github.com/quantumwake/*" \
+  --env "GIT_AUTH_TOKEN=$GITHUB_TOKEN" \
+  --env BP_PLATFORM_API="$ARCH"
+
+#    --builder paketobuildpacks/builder:base \
+#    --path . \
+#    --env BP_DOCKERFILE=Dockerfile \
 else
   echo "Building with Docker..."
   docker build --progress=plain \
-    --platform "$ARCH" -t "$IMAGE" -t "$LATEST" \
+    --platform "$ARCH" -t "$IMAGE" -t $LATEST \
     --no-cache .
 fi
